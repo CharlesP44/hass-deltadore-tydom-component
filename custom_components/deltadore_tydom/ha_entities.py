@@ -854,6 +854,98 @@ class HaClimate(ClimateEntity, HAEntity):
         """Set new target temperature."""
         await self._device.set_temperature(str(kwargs.get(ATTR_TEMPERATURE)))
 
+class HaOpeningContactBinarySensor(BinarySensorEntity, HAEntity):
+    """Base class for binary sensors representing an opening contact (door, window)."""
+
+    should_poll = False
+
+    def __init__(
+        self,
+        device: TydomDevice,
+        hass,
+        device_class: BinarySensorDeviceClass,
+    ) -> None:
+        """Initialize the binary sensor."""
+        self.hass = hass
+        self._device = device
+        self._device._ha_device = self
+        self._attr_unique_id = f"{self._device.device_id}"
+        self._attr_name = self._device.device_name
+        self._attr_device_class = device_class
+        self._registered_sensors = []
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device metadata for Home Assistant."""
+        return {
+            "identifiers": {(DOMAIN, self._device.device_id)},
+            "name": self._device.device_name,
+        }
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if the contact is open, False if closed or locked."""
+        # --- DÉBUT DU CODE DE DÉBOGAGE ---
+        LOGGER.warning("="*50)
+        LOGGER.warning(f"Débogage de is_on pour l'entité : {self._attr_name} ({self.entity_id})")
+        LOGGER.warning(f"Contenu complet de self._device.__dict__: {self._device.__dict__}")
+
+        # 1) Vérifier l'attribut global 'openState'
+        raw_state = getattr(self._device, "openState", None)
+        LOGGER.warning(f"1) Valeur de 'openState' global : {raw_state}")
+        if isinstance(raw_state, str):
+            result = raw_state.upper() not in ("LOCKED", "CLOSED")
+            LOGGER.warning(f"==> 'openState' trouvé, is_on retourne : {result}")
+            LOGGER.warning("="*50)
+            return result
+
+        # 2) Si pas d'état global, chercher les états partiels comme 'openState_1'
+        any_openstate_found = False
+        for key, value in self._device.__dict__.items():
+            if key.startswith("openState") and isinstance(value, str):
+                any_openstate_found = True
+                LOGGER.warning(f"2) Attribut partiel trouvé : {key} = '{value}'")
+                if value.upper() not in ("LOCKED", "CLOSED"):
+                    LOGGER.warning(f"==> '{key}' est ouvert, is_on retourne : True")
+                    LOGGER.warning("="*50)
+                    return True
+
+        # 3) Analyser les résultats des états partiels
+        LOGGER.warning(f"3) Est-ce qu'on a trouvé des 'openState_*' ? : {any_openstate_found}")
+        if any_openstate_found:
+            LOGGER.warning("==> On a trouvé des openState_* et ils étaient tous fermés, is_on retourne : False")
+            LOGGER.warning("="*50)
+            return False
+
+        # 4) Fallback sur 'intrusionDetect'
+        has_intrusion = hasattr(self._device, "intrusionDetect")
+        LOGGER.warning(f"4) Est-ce que 'intrusionDetect' existe ? : {has_intrusion}")
+        if has_intrusion:
+            intrusion_value = getattr(self._device, "intrusionDetect")
+            LOGGER.warning(f"   Valeur de 'intrusionDetect' : {intrusion_value}")
+            result = bool(intrusion_value)
+            LOGGER.warning(f"==> On utilise le fallback intrusionDetect, is_on retourne : {result}")
+            LOGGER.warning("="*50)
+            return result
+
+        # 5) Cas par défaut
+        LOGGER.warning("==> Aucun attribut connu trouvé, is_on retourne par défaut : False")
+        LOGGER.warning("="*50)
+        return False
+
+class HaWindowBinary(HaOpeningContactBinarySensor):
+    """Binary sensor for a Tydom window."""
+
+    def __init__(self, device: TydomWindow, hass) -> None:
+        """Initialize the binary sensor for a Tydom window."""
+        super().__init__(device, hass, BinarySensorDeviceClass.WINDOW)
+
+class HaDoorBinary(HaOpeningContactBinarySensor):
+    """Binary sensor for a Tydom door."""
+
+    def __init__(self, device: TydomDoor, hass) -> None:
+        """Initialize the binary sensor for a Tydom door."""
+        super().__init__(device, hass, BinarySensorDeviceClass.DOOR)
 
 class HaWindow(CoverEntity, HAEntity):
     """Representation of a Window."""
@@ -895,43 +987,6 @@ class HaWindow(CoverEntity, HAEntity):
             LOGGER.error("Unknown state for device %s", self._device.device_id)
             return True
 
-class HaWindowBinary(BinarySensorEntity, HAEntity):
-    """Binary sensor for a Tydom window.
-
-    Exposes ON when the window is open (any open mode),
-    and OFF when closed/locked.
-    """
-
-    should_poll = False
-    _attr_device_class = BinarySensorDeviceClass.WINDOW
-
-    def __init__(self, device: TydomWindow, hass) -> None:
-        """Initialize the binary sensor for a Tydom window."""
-        self.hass = hass
-        self._device = device
-        self._device._ha_device = self
-        self._attr_unique_id = f"{self._device.device_id}"
-        self._attr_name = self._device.device_name
-        self._registered_sensors = []
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device metadata for Home Assistant."""
-        return {
-            "identifiers": {(DOMAIN, self._device.device_id)},
-            "name": self._device.device_name,
-        }
-
-    @property
-    def is_on(self) -> bool:
-        """Return True if the window is open, False if closed or locked."""
-        raw = getattr(self._device, "openState", None)
-        if isinstance(raw, str):
-            raw_l = raw.lower()
-            return raw_l not in ("closed", "locked")
-        return False
-
-
 class HaDoor(CoverEntity, HAEntity):
     """Representation of a Door."""
 
@@ -972,42 +1027,6 @@ class HaDoor(CoverEntity, HAEntity):
             raise AttributeError(
                 "The required attributes 'openState' or 'intrusionDetect' are not available in the device."
             )
-
-class HaDoorBinary(BinarySensorEntity, HAEntity):
-    """Binary sensor for a Tydom door.
-
-    Exposes ON when the door is open, OFF when closed/locked.
-    """
-
-    should_poll = False
-    _attr_device_class = BinarySensorDeviceClass.DOOR
-
-    def __init__(self, device: TydomDoor, hass) -> None:
-        """Initialize the binary sensor for a Tydom door."""
-        self.hass = hass
-        self._device = device
-        self._device._ha_device = self
-        self._attr_unique_id = f"{self._device.device_id}"
-        self._attr_name = self._device.device_name
-        self._registered_sensors = []
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device metadata for Home Assistant."""
-        return {
-            "identifiers": {(DOMAIN, self._device.device_id)},
-            "name": self._device.device_name,
-        }
-
-    @property
-    def is_on(self) -> bool:
-        """Return True if the door is open, False if closed or locked."""
-        raw = getattr(self._device, "openState", None)
-        if isinstance(raw, str):
-            raw_l = raw.lower()
-            return raw_l not in ("closed", "locked")
-        return False
-
 
 class HaGate(CoverEntity, HAEntity):
     """Representation of a Gate."""
