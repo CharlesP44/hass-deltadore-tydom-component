@@ -28,6 +28,7 @@ from .tydom_devices import (
     TydomWeather,
     TydomWater,
     TydomThermo,
+    TydomScene,
 )
 
 if TYPE_CHECKING:
@@ -43,6 +44,7 @@ device_name = {}
 device_endpoint = {}
 device_type = {}
 device_metadata = {}
+scenario_metadata = {}  # Store scenario metadata from /configs/file
 
 
 class Reply(TypedDict):
@@ -239,11 +241,12 @@ class MessageHandler:
                 "/devices/install": partial(no_op, "msg_pairing"),
                 "/devices/meta": self.parse_devices_metadata,
                 "/events": event_message,
-                "/groups/file": partial(no_op, "msg_groups"),
+                "/groups/file": self.parse_groups_file,
                 "/info": self.parse_msg_info,
                 "/ping": ping_message,
                 "/refresh/all": partial(no_op, "msg_refresh_all"),
-                "/scenarios/file": partial(no_op, "msg_scenarios"),
+                "/scenarios/file": self.parse_scenarios_file,
+                "/moments/file": self.parse_moments_file,
             }
 
             parsed = data
@@ -256,24 +259,19 @@ class MessageHandler:
 
             if data:
                 if content_type == "application/json":
+                    # Content-Type is not reliable; it is use with text/html for example
                     with contextlib.suppress(json.decoder.JSONDecodeError):
                         parsed = json.loads(data)
                 elif content_type == "text/html":
                     msg_type = partial(no_op, "msg_html")
 
             if msg_type is None:
-                for key, value in MSG_MAPPING.items():
-                    if uri_origin.startswith(key):
-                        msg_type = value
-                        LOGGER.debug("Message type found for %s: %s", uri_origin, key)
-                        break
+                msg_type = MSG_MAPPING.get(uri_origin)
 
                 if msg_type is None and data:
                     first = data[:40]
-                    if b"doctype" in first:
+                    if b"doctype" in first:  # Content-Type header is not respected
                         msg_type = partial(no_op, "msg_html")
-                    elif b"id" in first:
-                        msg_type = self.parse_devices_data
 
             if msg_type is None:
                 LOGGER.warning("Unknown message type received %s: %s", uri_origin, data)
@@ -327,19 +325,6 @@ class MessageHandler:
         tydom_client, last_usage, uid, device_id, name, endpoint=None, data=None
     ) -> TydomDevice | None:
         """Get device class from its last usage."""
-
-        # FIXME voir: class CoverDeviceClass(StrEnum):
-        # Refer to the cover dev docs for device class descriptions
-        # AWNING = "awning"
-        # BLIND = "blind"
-        # CURTAIN = "curtain"
-        # DAMPER = "damper"
-        # DOOR = "door"
-        # GARAGE = "garage"
-        # GATE = "gate"
-        # SHADE = "shade"
-        # SHUTTER = "shutter"
-        # WINDOW = "window"
         match last_usage:
             case "shutter" | "klineShutter" | "awning" | "swingShutter":
                 return TydomShutter(
@@ -484,14 +469,22 @@ class MessageHandler:
                     data,
                 )
             case _:
-                # TODO generic sensor ?
-                LOGGER.warn(
-                    "Unknown usage : %s for device_id %s, uid %s",
+                LOGGER.info(
+                    "Unknown usage : %s for device_id %s, uid %s - creating generic sensor",
                     last_usage,
                     device_id,
                     uid,
                 )
-                return
+                return TydomDevice(
+                    tydom_client,
+                    uid,
+                    device_id,
+                    name,
+                    last_usage,
+                    endpoint,
+                    device_metadata.get(uid),
+                    data,
+                )
 
     @staticmethod
     async def parse_config_data(parsed, transaction_id):
@@ -511,6 +504,23 @@ class MessageHandler:
             if i["last_usage"] == "alarm":
                 device_name[device_unique_id] = "Tyxal Alarm"
 
+        # Parse scenarios metadata from /configs/file
+        if "scenarios" in parsed and isinstance(parsed["scenarios"], list):
+            for scenario in parsed["scenarios"]:
+                if isinstance(scenario, dict) and "id" in scenario:
+                    scenario_id = scenario["id"]
+                    scenario_metadata[scenario_id] = {
+                        "name": scenario.get("name", f"Scenario {scenario_id}"),
+                        "type": scenario.get("type", "NORMAL"),
+                        "picto": scenario.get("picto", ""),
+                        "rule_id": scenario.get("rule_id", ""),
+                    }
+                    LOGGER.debug(
+                        "Stored scenario metadata: id=%s, name=%s",
+                        scenario_id,
+                        scenario_metadata[scenario_id]["name"],
+                    )
+
         LOGGER.debug("Configuration updated")
         return []
 
@@ -521,13 +531,7 @@ class MessageHandler:
             for endpoint in i["endpoints"]:
                 if len(endpoint["cmetadata"]) > 0:
                     for elem in endpoint["cmetadata"]:
-                        device_id = i["id"]
-                        endpoint_id = endpoint["id"]
-                        unique_id = str(endpoint_id) + "_" + str(device_id)
-
                         if elem["name"] == "energyIndex":
-                            device_name[unique_id] = "Tywatt"
-                            device_type[unique_id] = "conso"
                             for params in elem["parameters"]:
                                 if params["name"] == "dest":
                                     for dest in params["enum_values"]:
@@ -545,8 +549,6 @@ class MessageHandler:
                                         self.tydom_client.add_poll_device_url_5m(url)
                                         LOGGER.debug("Add poll device : %s", url)
                         elif elem["name"] == "energyInstant":
-                            device_name[unique_id] = "Tywatt"
-                            device_type[unique_id] = "conso"
                             for params in elem["parameters"]:
                                 if params["name"] == "unit":
                                     for unit in params["enum_values"]:
@@ -564,11 +566,9 @@ class MessageHandler:
                                         self.tydom_client.add_poll_device_url_5m(url)
                                         LOGGER.debug("Add poll device : " + url)
                         elif elem["name"] == "energyHisto":
-                            device_name[unique_id] = "Tywatt"
-                            device_type[unique_id] = "conso"
                             for params in elem["parameters"]:
-                                if params["name"] == "src":
-                                    for src in params["enum_values"]:
+                                if params["name"] == "dest":
+                                    for dest in params["enum_values"]:
                                         url = (
                                             "/devices/"
                                             + str(i["id"])
@@ -576,14 +576,12 @@ class MessageHandler:
                                             + str(endpoint["id"])
                                             + "/cdata?name="
                                             + elem["name"]
-                                            + "&period=YEAR&periodOffset=0&src="
-                                            + src
+                                            + "&period=YEAR&periodOffset=0&dest="
+                                            + dest
                                         )
                                         self.tydom_client.add_poll_device_url_5m(url)
                                         LOGGER.debug("Add poll device : " + url)
                         elif elem["name"] == "energyDistrib":
-                            device_name[unique_id] = "Tywatt"
-                            device_type[unique_id] = "conso"
                             for params in elem["parameters"]:
                                 if params["name"] == "src":
                                     for src in params["enum_values"]:
@@ -606,24 +604,81 @@ class MessageHandler:
         """Parse device data."""
         LOGGER.debug("parse_devices_data : %s", parsed)
         devices = []
+        seen_unique_ids = {}  # Track unique_ids to detect collisions
 
         for i in parsed:
             if "endpoints" in i:
+                device_id = i["id"]
                 for endpoint in i["endpoints"]:
-                    if (
-                        endpoint["error"] == 0
-                        and "data" in endpoint
-                        and len(endpoint["data"]) > 0
-                    ):
-                        try:
-                            device_id = i["id"]
-                            endpoint_id = endpoint["id"]
-                            unique_id = str(endpoint_id) + "_" + str(device_id)
-                            name_of_id = self.get_name_from_id(unique_id)
-                            type_of_id = self.get_type_from_id(unique_id)
+                    endpoint_id = endpoint["id"]
+                    unique_id = str(endpoint_id) + "_" + str(device_id)
 
-                            data = {}
+                    # Check for collisions
+                    if unique_id in seen_unique_ids:
+                        LOGGER.warning(
+                            "Collision d'identifiant détectée : unique_id=%s déjà vu "
+                            "(device_id=%s, endpoint_id=%s). "
+                            "Appareil précédent : device_id=%s, endpoint_id=%s",
+                            unique_id,
+                            device_id,
+                            endpoint_id,
+                            seen_unique_ids[unique_id]["device_id"],
+                            seen_unique_ids[unique_id]["endpoint_id"],
+                        )
 
+                    # Get device name and type first to check if device is registered
+                    name_of_id = self.get_name_from_id(unique_id)
+                    type_of_id = self.get_type_from_id(unique_id)
+
+                    # Check if device is registered in configuration
+                    if not name_of_id or name_of_id == "":
+                        LOGGER.warning(
+                            "Endpoint ignoré (appareil non enregistré dans la configuration) : "
+                            "device_id=%s, endpoint_id=%s, unique_id=%s",
+                            device_id,
+                            endpoint_id,
+                            unique_id,
+                        )
+                        continue
+
+                    if not type_of_id or type_of_id == "":
+                        LOGGER.warning(
+                            "Endpoint ignoré (type d'appareil inconnu) : "
+                            "device_id=%s, endpoint_id=%s, unique_id=%s, name=%s",
+                            device_id,
+                            endpoint_id,
+                            unique_id,
+                            name_of_id,
+                        )
+                        continue
+
+                    # Check for errors or missing data, but still try to create device
+                    has_error = endpoint.get("error", 0) != 0
+                    has_data = "data" in endpoint and len(endpoint.get("data", [])) > 0
+
+                    if has_error:
+                        LOGGER.warning(
+                            "Endpoint avec erreur (création quand même) : "
+                            "device_id=%s, endpoint_id=%s, error=%s",
+                            device_id,
+                            endpoint_id,
+                            endpoint.get("error"),
+                        )
+
+                    if not has_data:
+                        LOGGER.warning(
+                            "Endpoint sans données valides (création avec état par défaut) : "
+                            "device_id=%s, endpoint_id=%s, name=%s",
+                            device_id,
+                            endpoint_id,
+                            name_of_id,
+                        )
+
+                    try:
+                        data = {}
+
+                        # Only process data if available and valid
+                        if has_data and not has_error:
                             for elem in endpoint["data"]:
                                 element_name = elem["name"]
                                 element_value = elem["value"]
@@ -635,18 +690,23 @@ class MessageHandler:
                             if "link" in endpoint and endpoint["link"].get("type") == "area":
                                 data["link_id"] = endpoint["link"].get("id")
 
-                            # Create the device
-                            device = await MessageHandler.get_device(
-                                self.tydom_client,
-                                type_of_id,
-                                unique_id,
-                                device_id,
-                                name_of_id,
-                                endpoint_id,
-                                data,
-                            )
-                            if device is not None:
-                                devices.append(device)
+                        # Create the device (even without data)
+                        device = await MessageHandler.get_device(
+                            self.tydom_client,
+                            type_of_id,
+                            unique_id,
+                            device_id,
+                            name_of_id,
+                            endpoint_id,
+                            data if data else None,
+                        )
+                        if device is not None:
+                            devices.append(device)
+                            seen_unique_ids[unique_id] = {
+                                "device_id": device_id,
+                                "endpoint_id": endpoint_id,
+                            }
+                            if has_data and not has_error:
                                 LOGGER.info(
                                     "Device update (id=%s, endpoint=%s, name=%s, type=%s)",
                                     device_id,
@@ -654,8 +714,29 @@ class MessageHandler:
                                     name_of_id,
                                     type_of_id,
                                 )
-                        except Exception:
-                            LOGGER.exception("msg_data error in parsing !")
+                            else:
+                                LOGGER.info(
+                                    "Device créé sans données (id=%s, endpoint=%s, name=%s, type=%s)",
+                                    device_id,
+                                    endpoint_id,
+                                    name_of_id,
+                                    type_of_id,
+                                )
+                        else:
+                            LOGGER.warning(
+                                "Device non créé (get_device retourné None) : "
+                                "device_id=%s, endpoint_id=%s, name=%s, type=%s",
+                                device_id,
+                                endpoint_id,
+                                name_of_id,
+                                type_of_id,
+                            )
+                    except Exception:
+                        LOGGER.exception(
+                            "msg_data error in parsing ! device_id=%s, endpoint_id=%s",
+                            device_id,
+                            endpoint_id,
+                        )
             else:
                 LOGGER.warning("Unsupported message received: %s", parsed)
         return devices
@@ -676,6 +757,7 @@ class MessageHandler:
                         type_of_id = self.get_type_from_id(unique_id)
 
                         data = {}
+
                         for elem in endpoint["cdata"]:
                             if type_of_id == "conso":
                                 element_name = None
@@ -685,11 +767,17 @@ class MessageHandler:
                                     element_name = (
                                         elem["name"] + "_" + elem["parameters"]["dest"]
                                     )
+                                    element_value = elem["values"]["counter"]
+                                    data[element_name] = element_value
+                                elif "parameters" in elem and elem["parameters"].get(
+                                    "period"
+                                ):
+                                    for key in elem["values"]:
+                                        if key.isupper():
+                                            element_name = elem["name"] + "_" + key
+                                            data[element_name] = elem["values"][key]
                                 else:
                                     continue
-
-                                element_value = elem["values"]["counter"]
-                                data[element_name] = element_value
 
                                 # Create the device
                                 device = await MessageHandler.get_device(
@@ -701,6 +789,7 @@ class MessageHandler:
                                     endpoint_id,
                                     data,
                                 )
+
                                 if device is not None:
                                     devices.append(device)
                                     LOGGER.debug(
@@ -808,6 +897,97 @@ class MessageHandler:
                         area_id,
                     )
         return devices
+
+    async def parse_scenarios_file(self, parsed, transaction_id):
+        """Parse scenarios file."""
+        LOGGER.debug("parse_scenarios_file : %s", parsed)
+        devices = []
+
+        if not parsed or not isinstance(parsed, dict):
+            return devices
+
+        scenarios = parsed.get("scn", [])
+        if not isinstance(scenarios, list):
+            return devices
+
+        for scenario in scenarios:
+            if not isinstance(scenario, dict):
+                continue
+
+            scenario_id = scenario.get("id")
+
+            if scenario_id is None:
+                continue
+
+            # Get scenario metadata from configs/file (stored in scenario_metadata dict)
+            scenario_meta = scenario_metadata.get(scenario_id, {})
+            scenario_name = scenario_meta.get("name", f"Scenario {scenario_id}")
+            scenario_type = scenario_meta.get("type", "NORMAL")
+            scenario_picto = scenario_meta.get("picto", "")
+            scenario_rule_id = scenario_meta.get("rule_id", "")
+
+            # Create unique ID for scene
+            unique_id = f"scene_{scenario_id}"
+
+            # Store scene info in device_name and device_type for consistency
+            device_name[unique_id] = scenario_name
+            device_type[unique_id] = "scene"
+
+            # Merge scenario data with metadata
+            scenario_data = {
+                "scene_id": scenario_id,
+                "name": scenario_name,
+                "type": scenario_type,
+                "picto": scenario_picto,
+                "rule_id": scenario_rule_id,
+                **scenario,  # Include grpAct, epAct, etc. from scenarios/file
+            }
+
+            # Create TydomScene device
+            scene_device = TydomScene(
+                self.tydom_client,
+                unique_id,
+                str(scenario_id),
+                scenario_name,
+                "scene",
+                None,
+                None,
+                scenario_data,
+            )
+            devices.append(scene_device)
+            LOGGER.debug(
+                "Created scene: %s (id: %s, type: %s, picto: %s)",
+                scenario_name,
+                scenario_id,
+                scenario_type,
+                scenario_picto,
+            )
+
+        return devices
+    async def parse_groups_file(self, parsed, transaction_id):
+        """Parse groups file."""
+        LOGGER.debug("parse_groups_file : %s", parsed)
+        # Groups are currently not exposed as entities, but we parse them for future use
+        # Store groups data in a way that can be accessed later if needed
+        if parsed and isinstance(parsed, dict):
+            groups = parsed.get("groups", [])
+            LOGGER.debug(
+                "Found %d groups", len(groups) if isinstance(groups, list) else 0
+            )
+        return []
+
+    async def parse_moments_file(self, parsed, transaction_id):
+        """Parse moments file."""
+        LOGGER.debug("parse_moments_file : %s", parsed)
+        # Moments (programs/schedules) are currently not exposed as entities
+        # but we parse them for future use (could be exposed as schedules or time-based automations)
+        if parsed and isinstance(parsed, dict):
+            moments = parsed.get("moments", [])
+            LOGGER.debug(
+                "Found %d moments/programs",
+                len(moments) if isinstance(moments, list) else 0,
+            )
+        return []
     # FUNCTIONS
 
     def get_type_from_id(self, id):
@@ -855,7 +1035,7 @@ class HTTPResponse:
 
 def _parse_response(raw_message: bytes) -> HTTPResponse:
     sock = BytesIOSocket(raw_message)
-    response = CoreHTTPResponse(sock)
+    response = CoreHTTPResponse(sock)  # type: ignore[arg-type]
     response.begin()
 
     return HTTPResponse(
@@ -883,7 +1063,8 @@ class _FakeHTTPRequest(CoreHTTPResponse):
         version = words[-1]
 
         if not version.startswith("HTTP/"):
-            self._close_conn()
+            if hasattr(self, "_close_conn"):
+                self._close_conn()  # type: ignore[attr-defined]
             raise ValueError(line)
 
         command, path = words[:2]
@@ -916,7 +1097,7 @@ def parse_request(raw_request: bytes) -> HTTPRequest:
 
     """
     sock = BytesIOSocket(raw_request)
-    request = _FakeHTTPRequest(sock)
+    request = _FakeHTTPRequest(sock)  # type: ignore[arg-type]
     request.begin()
 
     return HTTPRequest(
