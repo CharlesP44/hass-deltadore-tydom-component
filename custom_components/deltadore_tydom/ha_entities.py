@@ -1342,18 +1342,64 @@ class HaClimate(ClimateEntity, HAEntity):
 
     async def async_set_hvac_mode(self, hvac_mode):
         """Set new target hvac mode."""
-        # Logique pour le matériel récent (RE2020)
+        # Logique pour le matériel récent (RE2020) / PAC Centralisée
         if self._device.device_type == "re2020ControlBoiler":
             tydom_mode = "STOP" # Par défaut
             if hvac_mode == HVACMode.HEAT:
                 tydom_mode = "HEATING"
             elif hvac_mode == HVACMode.COOL:
                 tydom_mode = "COOLING"
-            await self._device.set_area_data("authorization", tydom_mode)
+            
+            # Récupérer le hub pour synchroniser toutes les zones de la PAC
+            hub = self._get_hub()
+            if hub and hasattr(hub, "devices"):
+                # On parcourt tous les appareils pour trouver les autres thermostats RE2020
+                for dev_uid, device in hub.devices.items():
+                    if getattr(device, "device_type", None) == "re2020ControlBoiler":
+                        # 1. Mise à jour optimiste (visuelle)
+                        device.authorization = tydom_mode
+                        
+                        # 2. Pré-remplir la température si nécessaire pour afficher la molette
+                        if tydom_mode in ["HEATING", "COOLING"] and getattr(device, "setpoint", None) is None:
+                            current_temp = getattr(device, "ambientTemperature", getattr(device, "temperature", 20.0))
+                            device.setpoint = current_temp
+                            
+                        # 3. Rafraîchir l'interface HA de cette zone
+                        if hasattr(device, "_ha_device") and device._ha_device is not None:
+                            device._ha_device.async_write_ha_state()
+                            
+                        # 4. Envoyer l'ordre à la box Tydom pour cette zone
+                        if hasattr(device, "set_area_data"):
+                            await device.set_area_data("authorization", tydom_mode)
+            else:
+                # Fallback de sécurité au cas où le hub n'est pas accessible
+                self._device.authorization = tydom_mode
+                if tydom_mode in ["HEATING", "COOLING"] and getattr(self._device, "setpoint", None) is None:
+                    current_temp = getattr(self._device, "ambientTemperature", getattr(self._device, "temperature", 20.0))
+                    self._device.setpoint = current_temp
+                self.async_write_ha_state()
+                await self._device.set_area_data("authorization", tydom_mode)
 
-        # Logique existante pour les anciens matériels
+        # Logique existante pour les anciens matériels (radiateurs électriques indépendants, etc.)
         else:
-            await self._device.set_hvac_mode(self.dict_modes_ha_to_dd.get(hvac_mode))
+            tydom_mode = self.dict_modes_ha_to_dd.get(hvac_mode)
+            if tydom_mode:
+                if hasattr(self._device, "hvacMode"):
+                    self._device.hvacMode = tydom_mode
+                elif hasattr(self._device, "thermicLevel"):
+                    self._device.thermicLevel = tydom_mode
+                
+                # Pré-remplir la température pour forcer l'affichage de la molette
+                if tydom_mode in ["NORMAL", "HEATING", "COOLING", "AUTO"]:
+                    current_temp = getattr(self._device, "ambientTemperature", getattr(self._device, "temperature", 20.0))
+                    if getattr(self._device, "setpoint", None) is None:
+                        self._device.setpoint = current_temp
+                    if getattr(self._device, "heatSetpoint", None) is None:
+                        self._device.heatSetpoint = current_temp
+
+                self.async_write_ha_state()
+                
+            await self._device.set_hvac_mode(tydom_mode)
 
     @property
     def preset_mode(self) -> str | None:
@@ -1397,10 +1443,16 @@ class HaClimate(ClimateEntity, HAEntity):
         """Set new target temperature."""
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is not None:
+            # Mise à jour optimiste de la température sur l'interface
+            if hasattr(self._device, "setpoint"):
+                self._device.setpoint = temperature
+            elif hasattr(self._device, "heatSetpoint"):
+                self._device.heatSetpoint = temperature
+            self.async_write_ha_state()
+
             # Logique pour le matériel récent (RE2020)
             if self._device.device_type == "re2020ControlBoiler":
                 await self._device.set_area_data("setpoint", str(temperature))
-
             # Logique existante pour les anciens matériels
             else:
                 await self._device.set_temperature(str(temperature))
