@@ -273,6 +273,14 @@ class MessageHandler:
             if msg_type is None:
                 msg_type = MSG_MAPPING.get(uri_origin)
 
+                # Ignorer silencieusement les réponses "OK" génériques après une commande PUT
+                if msg_type is None and uri_origin:
+                    if uri_origin.startswith("/areas/") and uri_origin.endswith("/data"):
+                        msg_type = partial(no_op, "msg_area_data_put")
+                    elif uri_origin.startswith("/devices/") and ("/data" in uri_origin or "/cdata" in uri_origin):
+                        msg_type = partial(no_op, "msg_device_data_put")
+
+                # Sécurité si la box renvoie du HTML au lieu du JSON
                 if msg_type is None and data:
                     first = data[:40]
                     if b"doctype" in first:  # Content-Type header is not respected
