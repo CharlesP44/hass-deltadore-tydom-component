@@ -34,6 +34,8 @@ from .ha_entities import (
     HaClimate,
     HaWindow,
     HaDoor,
+    HaWindowBinary,
+    HaDoorBinary,
     HaGate,
     HaGarage,
     HaLight,
@@ -44,6 +46,7 @@ from .ha_entities import (
     HASensor,
     HAScene,
     HASwitch,
+    BinarySensorBase,
 )
 
 from .const import LOGGER
@@ -158,6 +161,7 @@ class Hub:
         return (
             self.add_cover_callback is not None
             and self.add_sensor_callback is not None
+            and self.add_binary_sensor_callback is not None
             and self.add_climate_callback is not None
             and self.add_light_callback is not None
             and self.add_lock_callback is not None
@@ -212,6 +216,15 @@ class Hub:
                             self.devices[device.device_id], device
                         )
 
+    def _add_sensors(self, sensors):
+        """Route sensors to the correct platform (sensor or binary_sensor)."""
+        regular = [s for s in sensors if not isinstance(s, BinarySensorBase)]
+        binary = [s for s in sensors if isinstance(s, BinarySensorBase)]
+        if regular and self.add_sensor_callback is not None:
+            self.add_sensor_callback(regular)
+        if binary and self.add_binary_sensor_callback is not None:
+            self.add_binary_sensor_callback(binary)
+
     async def create_ha_device(self, device):  # noqa: C901
         """Create a new HA device."""
         match device:
@@ -222,16 +235,14 @@ class Hub:
                 self.ha_devices[device.device_id] = ha_device
                 if self.add_update_callback is not None:
                     self.add_update_callback([ha_device])
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomShutter():
                 LOGGER.debug("Create cover %s", device.device_id)
                 ha_device = HACover(device, self._hass)
                 self.ha_devices[device.device_id] = ha_device
                 if self.add_cover_callback is not None:
                     self.add_cover_callback([ha_device])
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomEnergy():
                 LOGGER.debug("Create conso %s", device.device_id)
                 ha_device = HAEnergy(device, self._hass)
@@ -240,18 +251,15 @@ class Hub:
                 if self.add_sensor_callback is not None:
                     self.add_sensor_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
 
             case TydomSmoke():
                 LOGGER.debug("Create smoke %s", device.device_id)
                 ha_device = HASmoke(device, self._hass)
                 self.ha_devices[device.device_id] = ha_device
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback([ha_device])
-
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                if self.add_binary_sensor_callback is not None:
+                    self.add_binary_sensor_callback([ha_device])
+                self._add_sensors(ha_device.get_sensors())
             case TydomBoiler():
                 LOGGER.debug("Create boiler %s", device.device_id)
                 ha_device = HaClimate(device, self._hass)
@@ -259,14 +267,9 @@ class Hub:
                 if self.add_climate_callback is not None:
                     self.add_climate_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomWindow():
                 LOGGER.debug("Create window %s", device.device_id)
-                ha_device = HaWindow(device, self._hass)
-                self.ha_devices[device.device_id] = ha_device
-
-                # Décision automatique selon les attributs du device
                 if any(
                     hasattr(device, a)
                     for a in ["position", "positionCmd", "level", "levelCmd"]
@@ -275,6 +278,7 @@ class Hub:
                         "Window %s has motor control → adding as cover",
                         device.device_id,
                     )
+                    ha_device = HaWindow(device, self._hass)
                     if self.add_cover_callback:
                         self.add_cover_callback([ha_device])
                 else:
@@ -282,29 +286,13 @@ class Hub:
                         "Window %s is passive → adding as binary_sensor",
                         device.device_id,
                     )
+                    ha_device = HaWindowBinary(device, self._hass)
                     if self.add_binary_sensor_callback:
                         self.add_binary_sensor_callback([ha_device])
-
-                if self.add_sensor_callback:
-                    self.add_sensor_callback(ha_device.get_sensors())
-            #                LOGGER.debug("Create window %s", device.device_id)
-            #                ha_device = HaWindow(device, self._hass)
-            #                self.ha_devices[device.device_id] = ha_device
-            #                # On ne l'ajoute plus comme cover !
-            #                # if self.add_cover_callback is not None:
-            #                #     self.add_cover_callback([ha_device])
-            #                # On le route vers la plateforme binary_sensor
-            #                if self.add_binary_sensor_callback is not None:
-            #                    self.add_binary_sensor_callback([ha_device])
-            #                # on garde les capteurs associés
-            #                if self.add_sensor_callback is not None:
-            #                    self.add_sensor_callback(ha_device.get_sensors())
+                self.ha_devices[device.device_id] = ha_device
+                self._add_sensors(ha_device.get_sensors())
             case TydomDoor():
                 LOGGER.debug("Create door %s", device.device_id)
-                ha_device = HaDoor(device, self._hass)
-                self.ha_devices[device.device_id] = ha_device
-
-                # Décision automatique selon les attributs du device
                 if any(
                     hasattr(device, a)
                     for a in ["position", "positionCmd", "level", "levelCmd"]
@@ -312,17 +300,18 @@ class Hub:
                     LOGGER.debug(
                         "Door %s has motor control → adding as cover", device.device_id
                     )
+                    ha_device = HaDoor(device, self._hass)
                     if self.add_cover_callback:
                         self.add_cover_callback([ha_device])
                 else:
                     LOGGER.debug(
                         "Door %s is passive → adding as binary_sensor", device.device_id
                     )
+                    ha_device = HaDoorBinary(device, self._hass)
                     if self.add_binary_sensor_callback:
                         self.add_binary_sensor_callback([ha_device])
-
-                if self.add_sensor_callback:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self.ha_devices[device.device_id] = ha_device
+                self._add_sensors(ha_device.get_sensors())
             case TydomGate():
                 LOGGER.debug("Create gate %s", device.device_id)
                 ha_device = HaGate(device, self._hass)
@@ -330,8 +319,7 @@ class Hub:
                 if self.add_cover_callback is not None:
                     self.add_cover_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomGarage():
                 LOGGER.debug("Create garage %s", device.device_id)
                 ha_device = HaGarage(device, self._hass)
@@ -339,8 +327,7 @@ class Hub:
                 if self.add_cover_callback is not None:
                     self.add_cover_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomLight():
                 LOGGER.debug("Create light %s", device.device_id)
                 ha_device = HaLight(device, self._hass)
@@ -348,8 +335,7 @@ class Hub:
                 if self.add_light_callback is not None:
                     self.add_light_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomAlarm():
                 LOGGER.debug("Create alarm %s", device.device_id)
                 ha_device = HaAlarm(device, self._hass)
@@ -357,8 +343,7 @@ class Hub:
                 if self.add_alarm_callback is not None:
                     self.add_alarm_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomWeather():
                 LOGGER.debug("Create weather %s", device.device_id)
                 ha_device = HaWeather(device, self._hass)
@@ -366,17 +351,14 @@ class Hub:
                 if self.add_weather_callback is not None:
                     self.add_weather_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomWater():
                 LOGGER.debug("Create moisture %s", device.device_id)
                 ha_device = HaMoisture(device, self._hass)
                 self.ha_devices[device.device_id] = ha_device
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback([ha_device])
-
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                if self.add_binary_sensor_callback is not None:
+                    self.add_binary_sensor_callback([ha_device])
+                self._add_sensors(ha_device.get_sensors())
             case TydomThermo():
                 LOGGER.debug("Create thermo %s", device.device_id)
                 ha_device = HaThermo(device, self._hass)
@@ -384,8 +366,7 @@ class Hub:
                 if self.add_sensor_callback is not None:
                     self.add_sensor_callback([ha_device])
 
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
             case TydomScene():
                 LOGGER.debug("Create scene %s", device.device_id)
                 ha_device = HAScene(device, self._hass)
@@ -398,8 +379,7 @@ class Hub:
                 self.ha_devices[device.device_id] = ha_device
                 if self.add_sensor_callback is not None:
                     self.add_sensor_callback([ha_device])
-                if self.add_sensor_callback is not None:
-                    self.add_sensor_callback(ha_device.get_sensors())
+                self._add_sensors(ha_device.get_sensors())
 
                 # Try to detect if device should also be a switch
                 # Check for on/off capabilities that aren't already handled
@@ -440,7 +420,7 @@ class Hub:
             await stored_device.update_device(device)
             ha_device = self.ha_devices[device.device_id]
             new_sensors = ha_device.get_sensors()
-            if len(new_sensors) > 0 and self.add_sensor_callback is not None:
+            if len(new_sensors) > 0:
                 # add new sensors
                 LOGGER.debug(
                     "Ajout de %d nouveau(x) capteur(s) pour le device %s: %s",
@@ -448,7 +428,7 @@ class Hub:
                     device.device_id,
                     [s._attr_name for s in new_sensors],
                 )
-                self.add_sensor_callback(new_sensors)
+                self._add_sensors(new_sensors)
             # ha_device.publish_updates()
             # ha_device.update()
         except KeyError as e:

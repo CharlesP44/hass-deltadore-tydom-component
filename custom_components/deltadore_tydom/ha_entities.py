@@ -99,6 +99,7 @@ from .tydom.tydom_devices import (
 from .const import DOMAIN, LOGGER
 from .tydom.MessageHandler import device_name
 
+
 class HAEntity:
     """Generic abstract HA entity."""
 
@@ -213,7 +214,9 @@ class HAEntity:
                 elif alt_name in self.units:
                     unit = self.units[alt_name]
 
-                if isinstance(value, bool):
+                if isinstance(sensor_class, BinarySensorDeviceClass) or isinstance(
+                    value, bool
+                ):
                     sensors.append(
                         GenericBinarySensor(
                             self._device, sensor_class, attribute, attribute
@@ -286,6 +289,7 @@ class HAEntity:
                 info["sw_version"] = str(sw_version)
 
         return info
+
 
 class GenericSensor(SensorEntity):
     """Representation of a generic sensor."""
@@ -487,6 +491,7 @@ class GenericSensor(SensorEntity):
         # The opposite of async_added_to_hass. Remove any registered call backs here.
         self._device.remove_callback(self.async_write_ha_state)
 
+
 class BinarySensorBase(BinarySensorEntity):
     """Base representation of a Sensor."""
 
@@ -566,6 +571,7 @@ class BinarySensorBase(BinarySensorEntity):
         # The opposite of async_added_to_hass. Remove any registered call backs here.
         self._device.remove_callback(self.async_write_ha_state)
 
+
 class GenericBinarySensor(BinarySensorBase):
     """Generic representation of a Binary Sensor."""
 
@@ -644,12 +650,11 @@ class GenericBinarySensor(BinarySensorBase):
                                     return False
         return True
 
-    # The value of this sensor.
     @property
-    def is_on(self):
+    def is_on(self) -> bool:
         """Return the state of the sensor."""
-        # Utiliser getattr avec une valeur par défaut pour éviter AttributeError
-        return getattr(self._device, self._attribute, False)
+        return bool(getattr(self._device, self._attribute, False))
+
 
 class HATydom(UpdateEntity, HAEntity):
     """Representation of a Tydom Gateway."""
@@ -687,13 +692,13 @@ class HATydom(UpdateEntity, HAEntity):
         "site.json",
         "trigger.json",
         "TYDOM.dat",
-        "protocols",    #
-        "weather",      #
-        "geoloc",       #
-        "clock",        #
-        "moments",      #
+        "protocols",  #
+        "weather",  #
+        "geoloc",  #
+        "clock",  #
+        "moments",  #
         "local_claim",  #
-        "maintenance"   #
+        "maintenance",  #
     ]
 
     def __init__(self, device: Tydom, hass) -> None:
@@ -761,6 +766,7 @@ class HATydom(UpdateEntity, HAEntity):
     ) -> None:
         """Install an update."""
         await self._device.async_trigger_firmware_update()
+
 
 class HAEnergy(SensorEntity, HAEntity):
     """Representation of an Energy sensor."""
@@ -874,6 +880,7 @@ class HAEnergy(SensorEntity, HAEntity):
                 info["sw_version"] = str(sw_version)
         return self._enrich_device_info(info)
 
+
 class HACover(CoverEntity, HAEntity):
     """Representation of a Cover."""
 
@@ -884,11 +891,11 @@ class HACover(CoverEntity, HAEntity):
     _attr_has_entity_name = True
 
     sensor_classes = {
-        "batt_defect": BinarySensorDeviceClass.PROBLEM,
-        "thermic_defect": BinarySensorDeviceClass.PROBLEM,
-        "up_defect": BinarySensorDeviceClass.PROBLEM,
-        "down_defect": BinarySensorDeviceClass.PROBLEM,
-        "obstacle_defect": BinarySensorDeviceClass.PROBLEM,
+        "battDefect": BinarySensorDeviceClass.PROBLEM,
+        "thermicDefect": BinarySensorDeviceClass.PROBLEM,
+        "upDefect": BinarySensorDeviceClass.PROBLEM,
+        "downDefect": BinarySensorDeviceClass.PROBLEM,
+        "obstacleDefect": BinarySensorDeviceClass.PROBLEM,
         "intrusion": BinarySensorDeviceClass.PROBLEM,
     }
 
@@ -997,6 +1004,7 @@ class HACover(CoverEntity, HAEntity):
         """Stop the cover tilt."""
         await self._device.slope_stop()
 
+
 class HASmoke(BinarySensorEntity, HAEntity):
     """Representation of an Smoke sensor."""
 
@@ -1005,7 +1013,7 @@ class HASmoke(BinarySensorEntity, HAEntity):
     _attr_icon = "mdi:smoke-detector"
     _attr_has_entity_name = True
 
-    sensor_classes = {"batt_defect": BinarySensorDeviceClass.PROBLEM}
+    sensor_classes = {"battDefect": BinarySensorDeviceClass.PROBLEM}
 
     def __init__(self, device: TydomSmoke, hass) -> None:
         """Initialize TydomSmoke."""
@@ -1038,6 +1046,7 @@ class HASmoke(BinarySensorEntity, HAEntity):
             info["model"] = device_info["model"]
         return self._enrich_device_info(info)
 
+
 class HaClimate(ClimateEntity, HAEntity):
     """A climate entity."""
 
@@ -1048,11 +1057,11 @@ class HaClimate(ClimateEntity, HAEntity):
     sensor_classes = {
         "temperature": SensorDeviceClass.TEMPERATURE,
         "outTemperature": SensorDeviceClass.TEMPERATURE,
-        "TempSensorDefect": BinarySensorDeviceClass.PROBLEM,
-        "TempSensorOpenCirc": BinarySensorDeviceClass.PROBLEM,
-        "TempSensorShortCut": BinarySensorDeviceClass.PROBLEM,
-        "ProductionDefect": BinarySensorDeviceClass.PROBLEM,
-        "BatteryCmdDefect": BinarySensorDeviceClass.PROBLEM,
+        "tempSensorDefect": BinarySensorDeviceClass.PROBLEM,
+        "tempSensorOpenCirc": BinarySensorDeviceClass.PROBLEM,
+        "tempSensorShortCut": BinarySensorDeviceClass.PROBLEM,
+        "productionDefect": BinarySensorDeviceClass.PROBLEM,
+        "batteryCmdDefect": BinarySensorDeviceClass.PROBLEM,
         "battLevel": SensorDeviceClass.BATTERY,
     }
 
@@ -1247,14 +1256,20 @@ class HaClimate(ClimateEntity, HAEntity):
         source = None
 
         # Priorité au matériel récent (Logique PR)
-        if hasattr(self._device, "authorization") and self._device.authorization is not None:
+        if (
+            hasattr(self._device, "authorization")
+            and self._device.authorization is not None
+        ):
             mode_tydom = self._device.authorization
             source = "authorization"
         # Fallback pour les anciens matériels
         elif hasattr(self._device, "hvacMode") and self._device.hvacMode is not None:
             mode_tydom = self._device.hvacMode
             source = "hvacMode"
-        elif hasattr(self._device, "thermicLevel") and self._device.thermicLevel is not None:
+        elif (
+            hasattr(self._device, "thermicLevel")
+            and self._device.thermicLevel is not None
+        ):
             mode_tydom = self._device.thermicLevel
             source = "thermicLevel"
 
@@ -1335,12 +1350,12 @@ class HaClimate(ClimateEntity, HAEntity):
         """Set new target hvac mode."""
         # Logique pour le matériel récent (RE2020) / PAC Centralisée
         if self._device.device_type == "re2020ControlBoiler":
-            tydom_mode = "STOP" # Par défaut
+            tydom_mode = "STOP"  # Par défaut
             if hvac_mode == HVACMode.HEAT:
                 tydom_mode = "HEATING"
             elif hvac_mode == HVACMode.COOL:
                 tydom_mode = "COOLING"
-            
+
             # Récupérer le hub pour synchroniser toutes les zones de la PAC
             hub = self._get_hub()
             if hub and hasattr(hub, "devices"):
@@ -1349,24 +1364,41 @@ class HaClimate(ClimateEntity, HAEntity):
                     if getattr(device, "device_type", None) == "re2020ControlBoiler":
                         # 1. Mise à jour optimiste (visuelle)
                         device.authorization = tydom_mode
-                        
+
                         # 2. Pré-remplir la température si nécessaire pour afficher la molette
-                        if tydom_mode in ["HEATING", "COOLING"] and getattr(device, "setpoint", None) is None:
-                            current_temp = getattr(device, "ambientTemperature", getattr(device, "temperature", 20.0))
+                        if (
+                            tydom_mode in ["HEATING", "COOLING"]
+                            and getattr(device, "setpoint", None) is None
+                        ):
+                            current_temp = getattr(
+                                device,
+                                "ambientTemperature",
+                                getattr(device, "temperature", 20.0),
+                            )
                             device.setpoint = current_temp
-                            
+
                         # 3. Rafraîchir l'interface HA de cette zone
-                        if hasattr(device, "_ha_device") and device._ha_device is not None:
+                        if (
+                            hasattr(device, "_ha_device")
+                            and device._ha_device is not None
+                        ):
                             device._ha_device.async_write_ha_state()
-                            
+
                         # 4. Envoyer l'ordre à la box Tydom pour cette zone
                         if hasattr(device, "set_area_data"):
                             await device.set_area_data("authorization", tydom_mode)
             else:
                 # Fallback de sécurité au cas où le hub n'est pas accessible
                 self._device.authorization = tydom_mode
-                if tydom_mode in ["HEATING", "COOLING"] and getattr(self._device, "setpoint", None) is None:
-                    current_temp = getattr(self._device, "ambientTemperature", getattr(self._device, "temperature", 20.0))
+                if (
+                    tydom_mode in ["HEATING", "COOLING"]
+                    and getattr(self._device, "setpoint", None) is None
+                ):
+                    current_temp = getattr(
+                        self._device,
+                        "ambientTemperature",
+                        getattr(self._device, "temperature", 20.0),
+                    )
                     self._device.setpoint = current_temp
                 self.async_write_ha_state()
                 await self._device.set_area_data("authorization", tydom_mode)
@@ -1379,17 +1411,21 @@ class HaClimate(ClimateEntity, HAEntity):
                     self._device.hvacMode = tydom_mode
                 elif hasattr(self._device, "thermicLevel"):
                     self._device.thermicLevel = tydom_mode
-                
+
                 # Pré-remplir la température pour forcer l'affichage de la molette
                 if tydom_mode in ["NORMAL", "HEATING", "COOLING", "AUTO"]:
-                    current_temp = getattr(self._device, "ambientTemperature", getattr(self._device, "temperature", 20.0))
+                    current_temp = getattr(
+                        self._device,
+                        "ambientTemperature",
+                        getattr(self._device, "temperature", 20.0),
+                    )
                     if getattr(self._device, "setpoint", None) is None:
                         self._device.setpoint = current_temp
                     if getattr(self._device, "heatSetpoint", None) is None:
                         self._device.heatSetpoint = current_temp
 
                 self.async_write_ha_state()
-                
+
             await self._device.set_hvac_mode(tydom_mode)
 
     @property
@@ -1448,6 +1484,7 @@ class HaClimate(ClimateEntity, HAEntity):
             else:
                 await self._device.set_temperature(str(temperature))
 
+
 class HaOpeningContactBinarySensor(BinarySensorEntity, HAEntity):
     """Base class for binary sensors representing an opening contact (door, window)."""
 
@@ -1471,75 +1508,75 @@ class HaOpeningContactBinarySensor(BinarySensorEntity, HAEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device metadata for Home Assistant."""
-        return {
+        info: DeviceInfo = {
             "identifiers": {(DOMAIN, self._device.device_id)},
             "name": self._device.device_name,
         }
+        if hasattr(self._device, "manufacturer") and self._device.manufacturer:
+            info["manufacturer"] = self._device.manufacturer
+        else:
+            info["manufacturer"] = "Delta Dore"
+        if hasattr(self._device, "productName") and self._device.productName:
+            info["model"] = self._device.productName
+        gateway_device_id = self._get_tydom_gateway_device_id()
+        if (
+            gateway_device_id is not None
+            and gateway_device_id != self._device.device_id
+        ):
+            info["via_device"] = (DOMAIN, gateway_device_id)
+        return info
 
     @property
     def is_on(self) -> bool:
         """Return True if the contact is open, False if closed or locked."""
-        # --- DÉBUT DU CODE DE DÉBOGAGE ---
-        LOGGER.warning("="*50)
-        LOGGER.warning(f"Débogage de is_on pour l'entité : {self._attr_name} ({self.entity_id})")
-        LOGGER.warning(f"Contenu complet de self._device.__dict__: {self._device.__dict__}")
-
-        # 1) Vérifier l'attribut global 'openState'
+        # Check global 'openState' attribute
         raw_state = getattr(self._device, "openState", None)
-        LOGGER.warning(f"1) Valeur de 'openState' global : {raw_state}")
         if isinstance(raw_state, str):
-            result = raw_state.upper() not in ("LOCKED", "CLOSED")
-            LOGGER.warning(f"==> 'openState' trouvé, is_on retourne : {result}")
-            LOGGER.warning("="*50)
-            return result
+            return raw_state.upper() not in ("LOCKED", "CLOSED")
 
-        # 2) Si pas d'état global, chercher les états partiels comme 'openState_1'
+        # Check partial states like 'openState_1', 'openState_2', …
         any_openstate_found = False
         for key, value in self._device.__dict__.items():
             if key.startswith("openState") and isinstance(value, str):
                 any_openstate_found = True
-                LOGGER.warning(f"2) Attribut partiel trouvé : {key} = '{value}'")
                 if value.upper() not in ("LOCKED", "CLOSED"):
-                    LOGGER.warning(f"==> '{key}' est ouvert, is_on retourne : True")
-                    LOGGER.warning("="*50)
                     return True
-
-        # 3) Analyser les résultats des états partiels
-        LOGGER.warning(f"3) Est-ce qu'on a trouvé des 'openState_*' ? : {any_openstate_found}")
         if any_openstate_found:
-            LOGGER.warning("==> On a trouvé des openState_* et ils étaient tous fermés, is_on retourne : False")
-            LOGGER.warning("="*50)
             return False
 
-        # 4) Fallback sur 'intrusionDetect'
-        has_intrusion = hasattr(self._device, "intrusionDetect")
-        LOGGER.warning(f"4) Est-ce que 'intrusionDetect' existe ? : {has_intrusion}")
-        if has_intrusion:
-            intrusion_value = getattr(self._device, "intrusionDetect")
-            LOGGER.warning(f"   Valeur de 'intrusionDetect' : {intrusion_value}")
-            result = bool(intrusion_value)
-            LOGGER.warning(f"==> On utilise le fallback intrusionDetect, is_on retourne : {result}")
-            LOGGER.warning("="*50)
-            return result
+        # Fallback on 'intrusionDetect'
+        if hasattr(self._device, "intrusionDetect"):
+            return bool(getattr(self._device, "intrusionDetect"))
 
-        # 5) Cas par défaut
-        LOGGER.warning("==> Aucun attribut connu trouvé, is_on retourne par défaut : False")
-        LOGGER.warning("="*50)
         return False
+
 
 class HaWindowBinary(HaOpeningContactBinarySensor):
     """Binary sensor for a Tydom window."""
+
+    sensor_classes = {
+        "battDefect": BinarySensorDeviceClass.PROBLEM,
+        "intrusionDetect": BinarySensorDeviceClass.PROBLEM,
+    }
 
     def __init__(self, device: TydomWindow, hass) -> None:
         """Initialize the binary sensor for a Tydom window."""
         super().__init__(device, hass, BinarySensorDeviceClass.WINDOW)
 
+
 class HaDoorBinary(HaOpeningContactBinarySensor):
     """Binary sensor for a Tydom door."""
+
+    sensor_classes = {
+        "battDefect": BinarySensorDeviceClass.PROBLEM,
+        "calibrationDefect": BinarySensorDeviceClass.PROBLEM,
+        "intrusionDetect": BinarySensorDeviceClass.PROBLEM,
+    }
 
     def __init__(self, device: TydomDoor, hass) -> None:
         """Initialize the binary sensor for a Tydom door."""
         super().__init__(device, hass, BinarySensorDeviceClass.DOOR)
+
 
 class HaWindow(CoverEntity, HAEntity):
     """Representation of a Window."""
@@ -1595,6 +1632,7 @@ class HaWindow(CoverEntity, HAEntity):
             LOGGER.debug("Unknown state for device %s", self._device.device_id)
             return None
 
+
 class HaDoor(CoverEntity, HAEntity):
     """Representation of a Door."""
 
@@ -1643,6 +1681,7 @@ class HaDoor(CoverEntity, HAEntity):
             return not bool(intrusion_detect)
         else:
             return None
+
 
 class HaGate(CoverEntity, HAEntity):
     """Representation of a Gate."""
@@ -1741,6 +1780,7 @@ class HaGate(CoverEntity, HAEntity):
         else:
             await self._device.toggle()
 
+
 class HaGarage(CoverEntity, HAEntity):
     """Representation of a Garage door."""
 
@@ -1750,7 +1790,7 @@ class HaGarage(CoverEntity, HAEntity):
     _attr_icon = "mdi:garage"
     _attr_has_entity_name = True
     sensor_classes = {
-        "thermic_defect": BinarySensorDeviceClass.PROBLEM,
+        "thermicDefect": BinarySensorDeviceClass.PROBLEM,
     }
 
     def __init__(self, device: TydomGarage, hass) -> None:
@@ -1821,6 +1861,7 @@ class HaGarage(CoverEntity, HAEntity):
         """Stop the cover."""
         await self._device.stop()
 
+
 class HaLight(LightEntity, HAEntity):
     """Representation of a Light."""
 
@@ -1828,7 +1869,9 @@ class HaLight(LightEntity, HAEntity):
     _attr_icon = "mdi:lightbulb"
     _attr_has_entity_name = True
     sensor_classes = {
-        "thermic_defect": BinarySensorDeviceClass.PROBLEM,
+        "thermicDefect": BinarySensorDeviceClass.PROBLEM,
+        "loadDefect": BinarySensorDeviceClass.PROBLEM,
+        "cmdDefect": BinarySensorDeviceClass.PROBLEM,
     }
     _attr_color_mode: ColorMode | str | None = None
     _attr_supported_color_modes: set[ColorMode] | set[str] | None = None
@@ -1901,6 +1944,7 @@ class HaLight(LightEntity, HAEntity):
     async def async_turn_off(self, **kwargs):
         """Turn device off."""
         await self._device.turn_off()
+
 
 class HaAlarm(AlarmControlPanelEntity, HAEntity):
     """Representation of an Alarm."""
@@ -2014,6 +2058,7 @@ class HaAlarm(AlarmControlPanelEntity, HAEntity):
         """Get alarm events."""
         return await self._device.get_events(event_type or "UNACKED_EVENTS")
 
+
 class HaWeather(WeatherEntity, HAEntity):
     """Representation of a weather entity."""
 
@@ -2100,6 +2145,7 @@ class HaWeather(WeatherEntity, HAEntity):
             info["model"] = device_info["model"]
         return info
 
+
 class HaMoisture(BinarySensorEntity, HAEntity):
     """Representation of an leak detector sensor."""
 
@@ -2108,7 +2154,7 @@ class HaMoisture(BinarySensorEntity, HAEntity):
     _attr_icon = "mdi:water"
     _attr_has_entity_name = True
 
-    sensor_classes = {"batt_defect": BinarySensorDeviceClass.PROBLEM}
+    sensor_classes = {"battDefect": BinarySensorDeviceClass.PROBLEM}
 
     def __init__(self, device: TydomWater, hass) -> None:
         """Initialize TydomSmoke."""
@@ -2140,6 +2186,7 @@ class HaMoisture(BinarySensorEntity, HAEntity):
         if "model" in device_info:
             info["model"] = device_info["model"]
         return info
+
 
 class HaThermo(SensorEntity, HAEntity):
     """Representation of a thermometer."""
@@ -2181,6 +2228,7 @@ class HaThermo(SensorEntity, HAEntity):
             info["model"] = device_info["model"]
         return info
 
+
 class HASensor(SensorEntity, HAEntity):
     """Representation of a generic sensor for unknown device types."""
 
@@ -2219,6 +2267,7 @@ class HASensor(SensorEntity, HAEntity):
         if "model" in device_info:
             info["model"] = device_info["model"]
         return info
+
 
 class HAScene(Scene, HAEntity):
     """Representation of a Tydom Scene."""
@@ -2423,6 +2472,7 @@ class HAScene(Scene, HAEntity):
         """Activate the scene."""
         await self._device.activate()
 
+
 class HASwitch(SwitchEntity, HAEntity):
     """Representation of a Tydom Switch."""
 
@@ -2499,6 +2549,7 @@ class HASwitch(SwitchEntity, HAEntity):
                     self._device._id, self._device._endpoint, "on", "false"
                 )
 
+
 class HAButton(ButtonEntity, HAEntity):
     """Representation of a Tydom Button."""
 
@@ -2546,6 +2597,7 @@ class HAButton(ButtonEntity, HAEntity):
             await self._device._tydom_client.put_devices_data(
                 self._device._id, self._device._endpoint, self._action_method, "ON"
             )
+
 
 class HANumber(NumberEntity, HAEntity):
     """Representation of a Tydom Number."""
@@ -2607,6 +2659,7 @@ class HANumber(NumberEntity, HAEntity):
             self._device._id, self._device._endpoint, self._attribute_name, str(value)
         )
 
+
 class HASelect(SelectEntity, HAEntity):
     """Representation of a Tydom Select."""
 
@@ -2655,6 +2708,7 @@ class HASelect(SelectEntity, HAEntity):
         await self._device._tydom_client.put_devices_data(
             self._device._id, self._device._endpoint, self._attribute_name, option
         )
+
 
 class HAEvent(EventEntity, HAEntity):
     """Representation of a Tydom Event."""
